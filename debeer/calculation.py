@@ -10,6 +10,7 @@ from copy import deepcopy
 # 3rd party packages
 import numpy as np
 import pandas as pd
+from enum import Enum
 from scipy.interpolate import interp1d
 from scipy.optimize import brentq
 try:
@@ -112,10 +113,8 @@ class DeBeerCalculation(object):
 
         # Validation of selected soil types
         for _soil_type in soil_type:
-            if _soil_type not in ["Clay", "Loam (silt)", "Sandy clay / loam (silt)",
-                                  "Clayey sand / loam (silt)", "Sand"]:
-                raise ValueError("Soil type %s not recognised. Needs to be one of 'Loam (silt)', "
-                                 "'Sandy clay / loam (silt)', 'Clayey sand / loam (silt)' or 'Sand'")
+            if isinstance(_soil_type, Soil.__class__):
+                raise ValueError(f"Soil type {_soil_type} not recognised. Use one of the members of the Soil class")
 
         # Validation to check that layering does not contain overlaps and starts from zero depth and spans the entire CPT
         if depth_from[0] != 0:
@@ -152,20 +151,25 @@ class DeBeerCalculation(object):
                 # Water level at a layer interface
                 pass
             else:
-                insert_layer = self.layering[
+                # Get a copy of the layer that has to be splitted
+                dry_layer = self.layering[
                     (self.layering['Depth from [m]'] <= water_level) &
                     (self.layering['Depth to [m]'] >= water_level)].iloc[0]
-                i = self.layering.__len__()
-                self.layering.loc[i, "Depth from [m]"] = insert_layer["Depth from [m]"]
-                self.layering.loc[i, "Depth to [m]"] = water_level
-                self.layering.loc[i, "Soil type"] = insert_layer['Soil type']
-                self.layering.loc[i, "Tertiary clay"] = insert_layer['Tertiary clay']
+                # Change the depth to the water level
+                dry_layer["Depth to [m]"] = water_level
+                self.layering.append(dry_layer, ignore_index = True)
+                # Change the existent layer tot the 'wet' layer
                 self.layering.loc[insert_layer.name, "Depth from [m]"] = water_level
+                # Sort the dataframe
                 self.layering.sort_values("Depth to [m]", inplace=True)
                 self.layering.reset_index(drop=True, inplace=True)
 
         # Assign total unit weights and calculate unit weight for the calculation
         if total_unit_weight is None:
+            dry_mask = self.layering["Depth to [m]"] <= water_level
+            wet_mask = self.layering["Depth from [m]"] >= water_level
+            self.layering.loc[, "Total unit weight [kN/m3]"] = total_unit_weight_dry
+
             for i, row in self.layering.iterrows():
                 if (0.5 * (row["Depth to [m]"] + row["Depth from [m]"])) < water_level:
                     self.layering.loc[i, "Total unit weight [kN/m3]"] = total_unit_weight_dry
@@ -307,7 +311,7 @@ class DeBeerCalculation(object):
             self.diameter_2 = self.diameter_pile
         else:
             self.diameter_1 = np.round(self.diameter_pile - (self.diameter_pile % 0.2), 1)
-            self.diameter_2 = np.round(self.diameter_pile + (self.diameter_pile % 0.2), 1)
+            self.diameter_2 = np.round(self.diameter_pile + (0.2 - (self.diameter_pile % 0.2)), 1)
         self.calc_1 = self.calculate_base_resistance_standard_diameter(
             pile_diameter=self.diameter_1, vanimpecorrection=vanimpecorrection, hcrit=hcrit
         )
@@ -334,7 +338,7 @@ class DeBeerCalculation(object):
             - Step 2: Apply a correction for the different stress level for a pile compared to a CPT
             - Step 3: Account for the transition from weaker the stronger layers by working downward along the CPT trace. The increase of resistance will be slower for a pile compared to a CPT
             - Step 4: Account for the transition from stronger to weaker layers by working through the CPT trace from the bottom up. A weaker layer will be felt sooner by the model pile than by the CPT
-            - Step 5: Take the average unit base resistance for one diameter below the given level. The average value should note be greater than :math:`q_{p,q+1}` at the given level.
+            - Step 5: Take the average unit base resistance for one diameter below the given level. The average value should not be greater than :math:`q_{p,q+1}` at the given level.
 
         .. math::
             \\text{Step 1}
@@ -590,22 +594,22 @@ class DeBeerCalculation(object):
         """
 
         for i, row in self.layering.iterrows():
-            if row['Soil type'] == 'Clay':
+            if row['Soil type'] == Soil.CLAY:
                 if row['qc avg [MPa]'] <= 4.5:
                     self.layering.loc[i, "qs [kPa]"] = 1000 * (1 / 30) * row['qc avg [MPa]']
                 else:
                     self.layering.loc[i, "qs [kPa]"] = 150
-            elif row['Soil type'] == 'Loam (silt)':
+            elif row['Soil type'] == Soil.LOAM:
                 if row['qc avg [MPa]'] <= 6:
                     self.layering.loc[i, "qs [kPa]"] = 1000 * (1 / 60) * row['qc avg [MPa]']
                 else:
                     self.layering.loc[i, "qs [kPa]"] = 100
-            elif (row['Soil type'] == 'Sandy clay / loam (silt)') or (row['Soil type'] == 'Clayey sand / loam (silt)'):
+            elif (row['Soil type'] in [Soil.CLAYEY_SAND, Soil.CLAYEY_LOAM, Soil.SANDY_CLAY, Soil.SANDY_LOAM]):
                 if row['qc avg [MPa]'] <= 10:
                     self.layering.loc[i, "qs [kPa]"] = 1000 * (1 / 80) * row['qc avg [MPa]']
                 else:
                     self.layering.loc[i, "qs [kPa]"] = 125
-            elif row['Soil type'] == 'Sand':
+            elif row['Soil type'] == Soil.SAND:
                 if row['qc avg [MPa]'] <= 10:
                     self.layering.loc[i, "qs [kPa]"] = 1000 * (1 / 90) * row['qc avg [MPa]']
                 elif 10 < row['qc avg [MPa]'] <= 20:
@@ -763,3 +767,13 @@ class DeBeerCalculation(object):
                                       self.capacity_calc['Layer thickness [m]'] * self.capacity_calc['qs [kPa]']
         self.Rs = self.capacity_calc["Rs,i [kN]"].sum()
         self.Rc = self.Rs + self.Rb
+        
+        
+class Soil(Enum):
+    SAND = "Sand"
+    CLAY = "Clay"
+    LOAM = "Loam (silt)"
+    SANDY_CLAY = "Sandy clay / loam (silt)"
+    SANDY_LOAM = "Sandy clay / loam (silt)"
+    CLAYEY_SAND = "Clayey sand / loam (silt)"
+    CLAYEY_LOAM = "Clayey sand / loam (silt)"

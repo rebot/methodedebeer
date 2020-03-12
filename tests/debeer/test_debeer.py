@@ -24,6 +24,7 @@ class Test_pilecalcdebeer(unittest.TestCase):
         self.cpt_data = pd.read_excel(os.path.join(TESTS_DATA_DIR, 'debeer_example.xlsx'))
 
     def test_pilecalcbeer(self):
+        soil = calculation.Soil
         calc = calculation.DeBeerCalculation(
             depth=self.cpt_data['z [m]'],
             qc=self.cpt_data['qc [MPa]'],
@@ -33,7 +34,7 @@ class Test_pilecalcdebeer(unittest.TestCase):
         calc.set_soil_layers(
             depth_from=[0, 3, 6, 15],
             depth_to=[3, 6, 15, 20],
-            soil_type=['Sand', 'Clay', 'Sand', 'Loam (silt)'])
+            soil_type=[soil.SAND, soil.CLAY, soil.SAND, soil.LOAM])
         calc.calculate_base_resistance()
         calc.correct_shaft_qc(cone_type='U')
         calc.calculate_average_qc()
